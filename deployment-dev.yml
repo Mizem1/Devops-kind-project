@@ -1,0 +1,21 @@
+# devops-lab-dev-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-lab-dev-deploy
+spec:
+  selector:
+    matchLabels:
+      app: devops-lab-dev
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        app: devops-lab-dev
+    spec:
+      containers:
+        - name: devops-lab-dev
+          image: claudiopizarro/devops-lab-dev:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
