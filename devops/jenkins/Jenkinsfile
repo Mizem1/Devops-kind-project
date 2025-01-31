@@ -1,0 +1,152 @@
+pipeline {
+    agent any
+
+    tools { nodejs "NODE" }
+
+    environment {
+        DOCKER_CREDENTIALS = credentials('dockerpwd')
+        REPO_URL = 'https://github.com/Mizem1/Devops-kind-project'
+    }
+
+    stages {
+        
+        stage('Checkout repo') {
+            steps{
+                checkout scmGit(branches: [[name: '**']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/claudeus123/Devops-kind-project']])
+            }
+        }
+        
+        stage('Clone repo') {
+            steps {
+                script {
+                    sh "rm -rf repo"
+                    sh "git clone ${REPO_URL} repo"
+                    dir('repo') {
+                        def branch = sh(script: "git for-each-ref --sort=committerdate refs/remotes/ --format='%(refname:short)' | tail -n 1 | awk -F'/' '{print \$NF}'", returnStdout: true).trim()
+                        
+                        echo "Most recent feature branch: ${branch}"
+                        sh "ls -l"
+                        if (branch) {
+                            echo "Branch found successfully: ${branch}"
+                            env.BRANCH = branch
+                        } else {
+                            error "No branch found with pattern feat-*"
+                        }
+                        sh "git checkout ${env.BRANCH}"
+                    }
+                }
+            }
+        }
+        
+        stage('Verify BRANCH'){
+            steps {
+                echo "Push on Branch: ${env.BRANCH}"
+            }
+        }
+
+        stage('Build') {
+            steps {
+                dir('repo') {
+                    sh "npm install"
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                dir('repo') {
+                    sh "npm test"
+                }
+            }
+        }
+
+        stage('Build Docker image') {
+            steps {
+                script {
+                    dir('repo') {
+                        if (env.BRANCH == 'main'){
+                            sh 'docker build -t claudiopizarro/devops-lab-prod .'
+                        } else {
+                            sh 'docker build -t claudiopizarro/devops-lab-dev .'
+                        }
+                        
+                    }
+                    
+                }
+            }
+        }
+
+        stage('Push Docker image') {
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'dockerpwd', variable: 'dockerpwd')]) {
+                        sh 'docker login -u claudiopizarro -p ${dockerpwd}'
+                    }
+                    dir('repo') {
+                        if (env.BRANCH == 'main'){
+                            sh 'docker push claudiopizarro/devops-lab-prod:latest'
+                        } else {
+                            sh 'docker push claudiopizarro/devops-lab-dev:latest'
+                        }
+                        
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    dir('repo'){
+                        
+                        withKubeConfig(caCertificate: '', clusterName: 'kind-jenkins-k8', contextName: '', credentialsId: 'jenkins-k8', namespace: 'jenkins', restrictKubeConfigAccess: false, serverUrl: 'https://127.0.0.1:43699') {
+                            if (env.BRANCH == 'main'){
+                                sh "kubectl delete pods -l app=devops-lab-prod -n jenkins"
+                                sh "sleep 5"
+                                sh 'kubectl apply -f deployment-prod.yml'
+                                sh 'kubectl apply -f service-prod.yml'
+                                sh "sleep 10"
+                            } else {
+                                sh "kubectl delete pods -l app=devops-lab-dev -n jenkins"
+                                sh "ls -l"
+                                sh "sleep 5"
+                                sh 'kubectl apply -f deployment-dev.yml'
+                                sh 'kubectl apply -f service-dev.yml'
+                                sh "sleep 10"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Kubernetes') {
+            steps {
+                script {
+                    withKubeConfig(caCertificate: '', clusterName: 'kind-jenkins-k8', contextName: '', credentialsId: 'jenkins-k8', namespace: 'jenkins', restrictKubeConfigAccess: false, serverUrl: 'https://127.0.0.1:43699') {
+                        sh 'kubectl get pods -n jenkins'
+                        sh 'kubectl get svc -n jenkins'
+                    }
+                }
+            }
+        }
+        
+    }
+    
+    post {
+        always {
+            script {
+                discordSend(
+                    description: "Jenkins Pipeline Build",
+                    footer: "CI/CD Pipeline from jenkins", 
+                    link: env.BUILD_URL,
+                    result: currentBuild.currentResult,
+                    title: JOB_NAME,
+                    webhookURL: "https://discord.com/api/webhooks/FILL_THE_URL"
+                )
+                sh "rm -rf repo"
+            }
+        }
+    }
+    
+}
